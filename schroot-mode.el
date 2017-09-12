@@ -78,17 +78,25 @@
   " schroot-mode"
   nil)
 
+
+
 (defun schroot-mode-advised-make-process
     (orig-make-process &rest :name name :buffer buffer :command command :coding coding :noquery noquery :stop stop :connection-type connection-type :filter filter :sentinel sentinel :stderr stderr)
   "Advice for MAKE-PROCESS to use schroot with the appropriate config"
   ;; Because remove-advice was not working for my purpose, calling this with a name "-_schroot-mode_-" results in the original function being called
   (let ((schr-cfg (schroot-mode-current-schroot-config)))
-     (if (and (schroot-mode-dir-p) (not (string-match "-_schroot-mode_-" (plist-get :name ':name))))
-	 (let ((original-command (plist-get :name ':command)))
-	   (plist-put :name ':command (append (list (schroot-mode-pass-loc)) nil (list (schroot-mode-current-schroot-config)) nil original-command))
-	   (apply orig-make-process :name))
-       (apply orig-make-process :name))))
-
+    (if (schroot-mode-dir-p)
+	(cond ((and (not (string-match "-_schroot-mode_-" (plist-get :name ':name)))
+			 (not (and (string= (car (plist-get :name ':command)) "/bin/bash") (string= (cadr (plist-get :name ':command)) "-c"))))
+	       (let ((original-command (plist-get :name ':command)))
+		 (plist-put :name ':command (append (list (schroot-mode-pass-loc)) nil (list (schroot-mode-current-schroot-config)) nil original-command))
+		 (apply orig-make-process :name)))
+	      ((and (string= (car (plist-get :name ':command)) "/bin/bash") (string= (cadr (plist-get :name ':command)) "-c"))
+	       (let ((original-command (cl-remove-if (lambda (s) "Match the `-c`s and `/bin/bash`s" (or (string= s "-c") (string= s "/bin/bash"))) (plist-get :name ':command))))
+		 (plist-put :name ':command (append (list (schroot-mode-pass-bash-loc)) nil (list (schroot-mode-current-schroot-config)) nil original-command))
+		 (apply orig-make-process :name))))
+      (apply orig-make-process :name))))
+  
 (defun schroot-mode-strip-tag (string)
   "Helper function to strip the -_schroot-mode_- tag out of STRING"
   (substring string 0 (or (string-match "-_schroot-mode_-" string)
@@ -147,7 +155,18 @@
 
 ;; I could not get async-shell-command to work. If anyone wants to give it a go, have at it.
 
-;; Need to define: start-process-shell-command start-file-process
+;; This is where it stops getting transparent.
+(defun schroot-mode-compile (command &optional comint)
+  "A function designed to replace the functionality of `compile`.
+Hopefully a temporary solution that will last until `compile`s bugginess in a chroot is figured out."
+  (get-buffer-create "*schroot-compilation*")
+  (interactive (list (compilation-read-command (eval compile-command))))
+  (if comint
+      (progn
+	(make-process :name "compilation" :buffer (get-buffer "*schroot-compilation*") :command (list "/bin/bash" "-c" command))
+	(shell "*schroot-compilation*"))
+    (make-process :name "compilation" :buffer (get-buffer "*schroot-compilation*") :command (list "/bin/bash" "-c" command)))
+  (pop-to-buffer (get-buffer "*schroot-compilation*")))
 
 (defun schroot-mode-addvice ()
   "Adds the advice for make-process to use schroot."
@@ -155,10 +174,7 @@
   (advice-add 'call-process :around #'schroot-mode-advised-call-process)
   (advice-add 'make-process :around #'schroot-mode-advised-make-process)
   (advice-add 'start-process :around #'schroot-mode-advised-start-process)
-  (advice-add 'shell-command :around #'schroot-mode-advised-shell-command)
-  (advice-add 'compilation-start :around #'schroot-mode-advised-compilation-start)
- ; (advice-add 'start-process-shell-command :around #'schroot-mode-advised-start-process-shell-command))
-  )
+  (advice-add 'shell-command :around #'schroot-mode-advised-shell-command))
 
 (defun schroot-mode-remove-advice ()
   "Removes the advice for make-process to use schroot."
